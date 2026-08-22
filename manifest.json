@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "oma-work",
+  "name": "Work Mode",
+  "version": "1.0.0",
+  "author": "hclark",
+  "license": "MIT",
+  "description": "Toggleable work mode: connects GlobalProtect VPN, switches theme to Tds, and sets default browser to Firefox.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Work Mode",
+    "description": "Toggle GlobalProtect VPN, Tds theme, and Firefox browser.",
+    "category": "System",
+    "defaultSection": "right",
+    "allowMultiple": false
+  }
+}
