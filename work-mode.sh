@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# omarchy:summary=Toggle work mode (GlobalProtect VPN, Tds theme, Firefox browser)
+# omarchy:summary=Toggle work mode (GlobalProtect VPN, notes mount, Tds theme, Firefox browser)
 # omarchy:group=plugin
-# omarchy:args=[toggle|on|off|status|auth] [--json]
+# omarchy:args=[toggle|on|off|status|auth|mount|unmount] [--json]
 # omarchy:examples=work-mode toggle
 
 set -euo pipefail
@@ -16,6 +16,9 @@ WORK_THEME="Tds"
 WORK_BROWSER="firefox.desktop"
 DEFAULT_FALLBACK_THEME="Tokyo Night"
 DEFAULT_FALLBACK_BROWSER="chromium.desktop"
+
+NOTES_REMOTE="workpc:/home/usrwpi/git/obsidian-notes"
+NOTES_MOUNT="$HOME/work-notes"
 
 mkdir -p "$STATE_DIR"
 
@@ -60,6 +63,76 @@ get_vpn_status() {
     fi
   fi
   echo "disconnected"
+}
+
+get_notes_status() {
+  if mountpoint -q "$NOTES_MOUNT" 2>/dev/null; then
+    echo "mounted"
+  else
+    echo "unmounted"
+  fi
+}
+
+mount_notes() {
+  mkdir -p "$NOTES_MOUNT"
+  if mountpoint -q "$NOTES_MOUNT" 2>/dev/null; then
+    echo "Work notes already mounted at $NOTES_MOUNT"
+    return 0
+  fi
+
+  if ! command -v sshfs >/dev/null 2>&1; then
+    echo "sshfs binary not found in PATH" >&2
+    return 1
+  fi
+
+  sshfs "$NOTES_REMOTE" "$NOTES_MOUNT" \
+    -o reconnect \
+    -o ServerAliveInterval=15 \
+    -o ServerAliveCountMax=3 \
+    -o ConnectTimeout=5 \
+    -o uid="$(id -u)" \
+    -o gid="$(id -g)" \
+    -o follow_symlinks
+}
+
+mount_notes_background() {
+  (
+    local max_attempts=30
+    local attempt=0
+    while [[ $attempt -lt $max_attempts ]]; do
+      # If work mode was disabled in the meantime, abort
+      if ! is_active; then
+        exit 0
+      fi
+      if mountpoint -q "$NOTES_MOUNT" 2>/dev/null; then
+        exit 0
+      fi
+      if mount_notes >/dev/null 2>&1; then
+        notify "Work Notes" "Obsidian notes mounted at $NOTES_MOUNT" "󰢏"
+        if command -v omarchy-shell >/dev/null 2>&1; then
+          omarchy-shell -q oma-work refresh 2>/dev/null || true
+        fi
+        exit 0
+      fi
+      attempt=$((attempt + 1))
+      sleep 2
+    done
+  ) >/dev/null 2>&1 &
+}
+
+unmount_notes() {
+  if mountpoint -q "$NOTES_MOUNT" 2>/dev/null; then
+    if command -v fusermount3 >/dev/null 2>&1; then
+      fusermount3 -u "$NOTES_MOUNT" 2>/dev/null || fusermount3 -u -z "$NOTES_MOUNT" 2>/dev/null || true
+    elif command -v fusermount >/dev/null 2>&1; then
+      fusermount -u "$NOTES_MOUNT" 2>/dev/null || fusermount -u -z "$NOTES_MOUNT" 2>/dev/null || true
+    elif command -v umount >/dev/null 2>&1; then
+      umount "$NOTES_MOUNT" 2>/dev/null || umount -l "$NOTES_MOUNT" 2>/dev/null || true
+    fi
+    echo "Unmounted $NOTES_MOUNT"
+  else
+    echo "Work notes not mounted at $NOTES_MOUNT"
+  fi
 }
 
 set_browser() {
@@ -132,6 +205,9 @@ enable_work_mode() {
     globalprotect connect >/dev/null 2>&1 &
   fi
 
+  # 4. Mount notes directory in background (retries until VPN connects)
+  mount_notes_background
+
   # Mark active
   touch "$ACTIVE_FILE"
 
@@ -143,16 +219,19 @@ enable_work_mode() {
     omarchy-shell -q oma-work refresh 2>/dev/null || true
   fi
 
-  echo "Work Mode enabled: VPN connecting, theme '$WORK_THEME' applied, default browser set to $WORK_BROWSER"
+  echo "Work Mode enabled: VPN connecting, notes mounting in background, theme '$WORK_THEME' applied, default browser set to $WORK_BROWSER"
 }
 
 disable_work_mode() {
-  # 1. Disconnect GlobalProtect VPN
+  # 1. Unmount notes directory BEFORE disconnecting VPN
+  unmount_notes >/dev/null 2>&1 || true
+
+  # 2. Disconnect GlobalProtect VPN
   if command -v globalprotect >/dev/null 2>&1; then
     globalprotect disconnect >/dev/null 2>&1 &
   fi
 
-  # 2. Restore previous theme
+  # 3. Restore previous theme
   local restore_theme=""
   if [[ -f "$PREV_THEME_FILE" ]]; then
     restore_theme=$(<"$PREV_THEME_FILE")
@@ -163,7 +242,7 @@ disable_work_mode() {
   fi
   set_theme "$restore_theme"
 
-  # 3. Restore previous browser
+  # 4. Restore previous browser
   local restore_browser=""
   if [[ -f "$PREV_BROWSER_FILE" ]]; then
     restore_browser=$(<"$PREV_BROWSER_FILE")
@@ -178,14 +257,14 @@ disable_work_mode() {
   rm -f "$ACTIVE_FILE"
 
   # Desktop notification
-  notify "Work Mode" "Disabled (VPN disconnected • restored theme: $restore_theme • browser: $restore_browser)" "󰢓"
+  notify "Work Mode" "Disabled (VPN disconnected • notes unmounted • restored theme: $restore_theme • browser: $restore_browser)" "󰢓"
 
   # Signal Omarchy Shell to refresh widget
   if command -v omarchy-shell >/dev/null 2>&1; then
     omarchy-shell -q oma-work refresh 2>/dev/null || true
   fi
 
-  echo "Work Mode disabled: VPN disconnected, restored theme '$restore_theme', default browser set to $restore_browser"
+  echo "Work Mode disabled: notes unmounted, VPN disconnected, restored theme '$restore_theme', default browser set to $restore_browser"
 }
 
 toggle_work_mode() {
@@ -213,15 +292,19 @@ print_status() {
   local browser
   browser=$(get_current_browser)
 
+  local notes
+  notes=$(get_notes_status)
+
   if [[ "${1:-}" == "--json" ]]; then
-    printf '{"active":%s,"vpn":"%s","theme":"%s","browser":"%s"}\n' \
-      "$active" "$vpn" "$theme" "$browser"
+    printf '{"active":%s,"vpn":"%s","theme":"%s","browser":"%s","notes":"%s"}\n' \
+      "$active" "$vpn" "$theme" "$browser" "$notes"
   else
     echo "Work Mode Status:"
     echo "  Active:  $active"
     echo "  VPN:     $vpn"
     echo "  Theme:   $theme"
     echo "  Browser: $browser"
+    echo "  Notes:   $notes"
   fi
 }
 
@@ -240,23 +323,31 @@ case "$action" in
   auth|reauth|login)
     interactive_auth
     ;;
+  mount)
+    mount_notes
+    ;;
+  unmount|umount)
+    unmount_notes
+    ;;
   status)
     shift || true
     print_status "${1:-}"
     ;;
   -h|--help|help)
-    echo "Usage: work-mode [toggle|on|off|status|auth] [--json]"
+    echo "Usage: work-mode [toggle|on|off|status|auth|mount|unmount] [--json]"
     echo ""
     echo "Commands:"
     echo "  toggle      Toggle work mode between ON and OFF (default)"
-    echo "  on          Enable work mode (Connect VPN, set Tds theme, set Firefox browser)"
-    echo "  off         Disable work mode (Disconnect VPN, restore theme and browser)"
+    echo "  on          Enable work mode (Connect VPN, mount notes, set Tds theme, set Firefox browser)"
+    echo "  off         Disable work mode (Unmount notes, disconnect VPN, restore theme and browser)"
     echo "  auth        Launch interactive GlobalProtect connect session in floating terminal"
-    echo "  status      Show current work mode, VPN, theme, and browser status"
+    echo "  mount       Explicitly mount notes sshfs filesystem"
+    echo "  unmount     Explicitly unmount notes sshfs filesystem"
+    echo "  status      Show current work mode, VPN, theme, browser, and notes mount status"
     ;;
   *)
     echo "Unknown command: $action" >&2
-    echo "Usage: work-mode [toggle|on|off|status|auth] [--json]" >&2
+    echo "Usage: work-mode [toggle|on|off|status|auth|mount|unmount] [--json]" >&2
     exit 1
     ;;
 esac

@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "hclark",
   "license": "MIT",
-  "description": "Toggleable work mode: connects GlobalProtect VPN, switches theme to Tds, and sets default browser to Firefox.",
+  "description": "Toggleable work mode: connects GlobalProtect VPN, mounts work notes via SSHFS, switches theme to Tds, and sets default browser to Firefox.",
   "kinds": [
     "bar-widget"
   ],
@@ -14,7 +14,7 @@
   },
   "barWidget": {
     "displayName": "Work Mode",
-    "description": "Toggle GlobalProtect VPN, Tds theme, and Firefox browser.",
+    "description": "Toggle GlobalProtect VPN, work notes mount, Tds theme, and Firefox browser.",
     "category": "System",
     "defaultSection": "right",
     "allowMultiple": false

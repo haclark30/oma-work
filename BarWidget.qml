@@ -12,6 +12,7 @@ BarWidget {
 
   property bool isWorkMode: false
   property string vpnStatus: "disconnected"
+  property string notesStatus: "unmounted"
   property string currentTheme: ""
   property string currentBrowser: ""
   property bool busy: false
@@ -19,7 +20,7 @@ BarWidget {
   readonly property string tooltipMessage: busy
     ? "Work Mode: Switching..."
     : (isWorkMode
-        ? "Work Mode: ACTIVE\n• VPN: " + vpnStatus + "\n• Theme: " + currentTheme + "\n• Browser: " + currentBrowser + "\n\n(Left-click: turn OFF, Right/Middle-click: VPN re-auth)"
+        ? "Work Mode: ACTIVE\n• VPN: " + vpnStatus + "\n• Notes: " + notesStatus + "\n• Theme: " + currentTheme + "\n• Browser: " + currentBrowser + "\n\n(Left-click: turn OFF, Right/Middle-click: VPN re-auth)"
         : "Work Mode: INACTIVE\n(Left-click: turn ON, Right/Middle-click: VPN re-auth)")
 
   function refresh() {
@@ -71,6 +72,7 @@ BarWidget {
           var res = JSON.parse(clean)
           root.isWorkMode = (res.active === true)
           root.vpnStatus = res.vpn || "disconnected"
+          root.notesStatus = res.notes || "unmounted"
           root.currentTheme = res.theme || ""
           root.currentBrowser = res.browser || ""
         } catch (e) {
@@ -106,12 +108,15 @@ BarWidget {
     function toggle(): void { root.toggleWorkMode() }
     function enable(): void { root.enableWorkMode() }
     function disable(): void { root.disableWorkMode() }
+    function mount(): void { runScript("mount") }
+    function unmount(): void { runScript("unmount") }
     function openAuth(): void { root.launchInteractiveAuth() }
     function refresh(): void { root.refresh() }
     function status(): string {
       return JSON.stringify({
         active: root.isWorkMode,
         vpn: root.vpnStatus,
+        notes: root.notesStatus,
         theme: root.currentTheme,
         browser: root.currentBrowser,
         busy: root.busy

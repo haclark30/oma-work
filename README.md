@@ -6,8 +6,10 @@ When activated, Work Mode puts your desktop into a work-ready state:
 1. **Switches your Default Browser**: Sets default web browser to **Firefox** (`firefox.desktop`)
 2. **Switches your Theme**: Sets your Omarchy theme to **`Tds`**
 3. **Connects your VPN**: Runs `globalprotect connect`
+4. **Mounts Work Notes**: Mounts your Obsidian notes vault via SSHFS (`workpc:/home/usrwpi/git/obsidian-notes` -> `~/work-notes`)
 
 When deactivated, it cleanly reverses the changes:
+- Unmounts work notes (`~/work-notes`) cleanly before disconnecting
 - Disconnects VPN (`globalprotect disconnect`)
 - Restores your previous personal theme (e.g. `Miasma`, `Tokyo Night`, etc.)
 - Restores your previous default browser (e.g. `chromium.desktop`)
@@ -17,16 +19,20 @@ When deactivated, it cleanly reverses the changes:
 ## Features
 
 - **Bar Widget**: Shows a briefcase icon (`󰢏`) in the Omarchy bar.
-  - **Highlighted/Active**: Work Mode is ON (VPN connected, Tds theme, Firefox browser).
+  - **Highlighted/Active**: Work Mode is ON (VPN connected, notes mounted, Tds theme, Firefox browser).
   - **Dimmed/Standard**: Work Mode is OFF.
   - **Left-Click**: Toggle Work Mode ON / OFF.
   - **Right-Click / Middle-Click**: Launch interactive floating terminal for VPN re-authentication.
-  - **Hover Tooltip**: Displays current VPN status, theme, and default browser.
+  - **Hover Tooltip**: Displays current VPN status, notes mount status, theme, and default browser.
+- **Robust SSHFS Mounting**:
+  - Automatically mounts notes vault in background once VPN connectivity is established.
+  - Safely unmounts (with lazy unmount fallback) *before* VPN disconnection to avoid hanging processes or filesystems.
+  - Uses SSH keepalives and auto-reconnect flags (`-o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3`).
 - **Seamless Re-Authentication**:
   - **SAML / Browser SSO**: Since default browser is switched to Firefox before connecting, GlobalProtect's SSO login page opens automatically in Firefox.
   - **Interactive Terminal Prompts**: Right-click or middle-click the bar widget, or run `./work-mode.sh auth` to immediately open an Omarchy floating terminal with `globalprotect connect`.
 - **State Preservation**: Automatically remembers what theme and browser you were using before turning Work Mode on so they are faithfully restored when turning it off.
-- **Desktop Notifications**: Sends native Omarchy notifications on state changes.
+- **Desktop Notifications**: Sends native Omarchy notifications on state changes (including when notes mount successfully).
 - **CLI & IPC Control**: Easily trigger via terminal scripts, keybindings, or `omarchy-shell`.
 
 ---
@@ -58,7 +64,7 @@ omarchy plugin add https://github.com/<your-username>/oma-work.git --enable
 ### 1. Omarchy Bar
 - **Left-Click**: Toggle between Work Mode and Personal Mode.
 - **Right-Click / Middle-Click**: Open interactive floating terminal for GlobalProtect authentication / MFA prompt.
-- **Hover**: View live status of VPN, theme, and browser.
+- **Hover**: View live status of VPN, notes mount, theme, and browser.
 
 ### 2. Command Line
 ```bash
@@ -74,6 +80,10 @@ omarchy plugin add https://github.com/<your-username>/oma-work.git --enable
 # Re-authenticate to VPN interactively
 ./work-mode.sh auth
 
+# Explicitly mount / unmount work notes
+./work-mode.sh mount
+./work-mode.sh unmount
+
 # Check current status
 ./work-mode.sh status
 ./work-mode.sh status --json
@@ -84,6 +94,8 @@ omarchy plugin add https://github.com/<your-username>/oma-work.git --enable
 omarchy-shell oma-work toggle
 omarchy-shell oma-work enable
 omarchy-shell oma-work disable
+omarchy-shell oma-work mount
+omarchy-shell oma-work unmount
 omarchy-shell oma-work status
 omarchy-shell oma-work refresh
 ```
@@ -103,7 +115,7 @@ bind = $mainMod ALT, A, exec, ./work-mode.sh auth
 oma-work/
 ├── manifest.json   # Omarchy plugin manifest
 ├── BarWidget.qml   # Omarchy bar widget & IPC handler
-├── work-mode.sh    # Core shell script managing VPN, theme, and browser state
+├── work-mode.sh    # Core shell script managing VPN, SSHFS mount, theme, and browser state
 ├── bin/
 │   └── oma-work    # Executable CLI wrapper
 └── README.md       # Documentation
