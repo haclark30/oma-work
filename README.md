@@ -18,14 +18,19 @@ When deactivated, it cleanly reverses the changes:
 
 ## Features
 
+- **Interactive Terminal Session Execution**:
+  - Work Mode changes execute in an interactive presentation terminal rather than silently in the background.
+  - Step-by-step visual progress is displayed as each change is applied (browser switch, theme switch, VPN connection, and notes mounting).
+  - Prompts for credentials, passwords, MFA, and SAML SSO work directly within the terminal session.
+  - Auto-launches an Omarchy floating presentation terminal when triggered from the bar widget, keybindings, or GUI; runs directly within existing terminal shells.
 - **Bar Widget**: Shows a briefcase icon (`󰢏`) in the Omarchy bar.
   - **Highlighted/Active**: Work Mode is ON (VPN connected, notes mounted, Tds theme, Firefox browser).
   - **Dimmed/Standard**: Work Mode is OFF.
-  - **Left-Click**: Toggle Work Mode ON / OFF.
+  - **Left-Click**: Launch interactive terminal session to toggle Work Mode ON / OFF.
   - **Right-Click / Middle-Click**: Launch interactive floating terminal for VPN re-authentication.
   - **Hover Tooltip**: Displays current VPN status, notes mount status, theme, and default browser.
 - **Robust SSHFS Mounting**:
-  - Automatically mounts notes vault in background once VPN connectivity is established.
+  - Mounts notes vault interactively with immediate feedback, falling back to background retry if VPN connection takes longer to initialize.
   - Safely unmounts (with lazy unmount fallback) *before* VPN disconnection to avoid hanging processes or filesystems.
   - Uses SSH keepalives and auto-reconnect flags (`-o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3`).
 - **Seamless Re-Authentication**:
@@ -62,20 +67,25 @@ omarchy plugin add https://github.com/<your-username>/oma-work.git --enable
 ## Usage
 
 ### 1. Omarchy Bar
-- **Left-Click**: Toggle between Work Mode and Personal Mode.
+- **Left-Click**: Launch interactive floating terminal session to toggle Work Mode ON / OFF.
 - **Right-Click / Middle-Click**: Open interactive floating terminal for GlobalProtect authentication / MFA prompt.
 - **Hover**: View live status of VPN, notes mount, theme, and browser.
 
 ### 2. Command Line
 ```bash
-# Toggle between ON and OFF
+# Toggle between ON and OFF (interactive session)
 ./work-mode.sh toggle
 
-# Explicitly enable work mode
+# Explicitly enable work mode interactively
 ./work-mode.sh on
 
-# Explicitly disable work mode
+# Explicitly disable work mode interactively
 ./work-mode.sh off
+
+# Run headlessly without opening a floating terminal
+./work-mode.sh toggle --headless
+./work-mode.sh on --headless
+./work-mode.sh off --headless
 
 # Re-authenticate to VPN interactively
 ./work-mode.sh auth

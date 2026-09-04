@@ -2,7 +2,7 @@
 
 # omarchy:summary=Toggle work mode (GlobalProtect VPN, notes mount, Tds theme, Firefox browser)
 # omarchy:group=plugin
-# omarchy:args=[toggle|on|off|status|auth|mount|unmount] [--json]
+# omarchy:args=[toggle|on|off|status|auth|mount|unmount] [--headless] [--json]
 # omarchy:examples=work-mode toggle
 
 set -euo pipefail
@@ -21,6 +21,46 @@ NOTES_REMOTE="workpc:/home/usrwpi/git/obsidian-notes"
 NOTES_MOUNT="$HOME/work-notes"
 
 mkdir -p "$STATE_DIR"
+
+# Parse options
+HEADLESS=0
+ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --headless|--no-terminal)
+      HEADLESS=1
+      ;;
+    *)
+      ARGS+=("$arg")
+      ;;
+  esac
+done
+
+if [[ ${#ARGS[@]} -gt 0 ]]; then
+  set -- "${ARGS[@]}"
+else
+  set -- "toggle"
+fi
+
+action="${1:-toggle}"
+
+# Auto-launch interactive presentation terminal if invoked without a TTY
+case "$action" in
+  status|-h|--help|help)
+    # Status and help are never redirected to a terminal window
+    ;;
+  *)
+    if [[ "$HEADLESS" -eq 0 && -z "${OMA_WORK_IN_TERMINAL:-}" && ! -t 1 ]]; then
+      if command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1; then
+        exec omarchy-launch-floating-terminal-with-presentation env OMA_WORK_IN_TERMINAL=1 "$0" "$@"
+      elif command -v omarchy-launch-terminal >/dev/null 2>&1; then
+        exec omarchy-launch-terminal env OMA_WORK_IN_TERMINAL=1 "$0" "$@"
+      elif command -v xdg-terminal-exec >/dev/null 2>&1; then
+        exec xdg-terminal-exec env OMA_WORK_IN_TERMINAL=1 "$0" "$@"
+      fi
+    fi
+    ;;
+esac
 
 notify() {
   local title="$1"
@@ -76,23 +116,29 @@ get_notes_status() {
 mount_notes() {
   mkdir -p "$NOTES_MOUNT"
   if mountpoint -q "$NOTES_MOUNT" 2>/dev/null; then
-    echo "Work notes already mounted at $NOTES_MOUNT"
+    echo "  ✓ Work notes already mounted at $NOTES_MOUNT"
     return 0
   fi
 
   if ! command -v sshfs >/dev/null 2>&1; then
-    echo "sshfs binary not found in PATH" >&2
+    echo "  ✗ sshfs binary not found in PATH" >&2
     return 1
   fi
 
-  sshfs "$NOTES_REMOTE" "$NOTES_MOUNT" \
+  if sshfs "$NOTES_REMOTE" "$NOTES_MOUNT" \
     -o reconnect \
     -o ServerAliveInterval=15 \
     -o ServerAliveCountMax=3 \
     -o ConnectTimeout=5 \
     -o uid="$(id -u)" \
     -o gid="$(id -g)" \
-    -o follow_symlinks
+    -o follow_symlinks; then
+    echo "  ✓ Mounted notes at $NOTES_MOUNT"
+    return 0
+  else
+    echo "  ✗ Failed to mount $NOTES_REMOTE at $NOTES_MOUNT" >&2
+    return 1
+  fi
 }
 
 mount_notes_background() {
@@ -122,6 +168,7 @@ mount_notes_background() {
 
 unmount_notes() {
   if mountpoint -q "$NOTES_MOUNT" 2>/dev/null; then
+    echo "  Unmounting $NOTES_MOUNT..."
     if command -v fusermount3 >/dev/null 2>&1; then
       fusermount3 -u "$NOTES_MOUNT" 2>/dev/null || fusermount3 -u -z "$NOTES_MOUNT" 2>/dev/null || true
     elif command -v fusermount >/dev/null 2>&1; then
@@ -129,9 +176,14 @@ unmount_notes() {
     elif command -v umount >/dev/null 2>&1; then
       umount "$NOTES_MOUNT" 2>/dev/null || umount -l "$NOTES_MOUNT" 2>/dev/null || true
     fi
-    echo "Unmounted $NOTES_MOUNT"
+
+    if ! mountpoint -q "$NOTES_MOUNT" 2>/dev/null; then
+      echo "  ✓ Successfully unmounted $NOTES_MOUNT"
+    else
+      echo "  ! Warning: $NOTES_MOUNT could not be unmounted cleanly" >&2
+    fi
   else
-    echo "Work notes not mounted at $NOTES_MOUNT"
+    echo "  • Work notes not mounted at $NOTES_MOUNT"
   fi
 }
 
@@ -168,68 +220,172 @@ is_active() {
 }
 
 interactive_auth() {
-  if command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1; then
-    omarchy-launch-floating-terminal-with-presentation "globalprotect connect"
-  elif command -v globalprotect >/dev/null 2>&1; then
-    globalprotect connect
+  echo "════════════════════════════════════════════════════════"
+  echo "       GLOBALPROTECT VPN RE-AUTHENTICATION              "
+  echo "════════════════════════════════════════════════════════"
+  echo ""
+  if command -v globalprotect >/dev/null 2>&1; then
+    echo "Starting interactive GlobalProtect session..."
+    echo "--------------------------------------------------------"
+    globalprotect connect || true
+    echo "--------------------------------------------------------"
+    echo ""
+    local vpn_state
+    vpn_state=$(get_vpn_status)
+    if [[ "$vpn_state" == "connected" ]]; then
+      echo "✓ VPN connected successfully"
+      if is_active && ! mountpoint -q "$NOTES_MOUNT" 2>/dev/null; then
+        echo ""
+        echo "▶ Mounting work notes ($NOTES_REMOTE -> $NOTES_MOUNT)..."
+        mount_notes || true
+      fi
+    else
+      echo "! GlobalProtect status: $vpn_state"
+    fi
   else
     echo "globalprotect binary not found in PATH" >&2
     exit 1
   fi
+
+  if command -v omarchy-shell >/dev/null 2>&1; then
+    omarchy-shell -q oma-work refresh 2>/dev/null || true
+  fi
 }
 
 enable_work_mode() {
-  # If not currently active, remember the previous theme and browser
+  echo "════════════════════════════════════════════════════════"
+  echo "           ACTIVATING WORK MODE                         "
+  echo "════════════════════════════════════════════════════════"
+  echo ""
+
+  # Save previous state if not already active
   if ! is_active; then
     local current_theme
     current_theme=$(get_current_theme)
     if [[ -n "$current_theme" && "${current_theme,,}" != "${WORK_THEME,,}" ]]; then
       echo "$current_theme" > "$PREV_THEME_FILE"
+      echo "  • Preserved personal theme: $current_theme"
     fi
 
     local current_browser
     current_browser=$(get_current_browser)
     if [[ -n "$current_browser" && "$current_browser" != "$WORK_BROWSER" ]]; then
       echo "$current_browser" > "$PREV_BROWSER_FILE"
+      echo "  • Preserved personal browser: $current_browser"
     fi
   fi
 
   # 1. Switch default browser to Firefox FIRST (so SAML SSO opens in Firefox)
+  echo ""
+  echo "▶ [1/4] Setting default browser to Firefox ($WORK_BROWSER)..."
   set_browser "$WORK_BROWSER"
+  echo "  ✓ Default browser set to Firefox"
 
   # 2. Change Omarchy Theme to Tds
+  echo ""
+  echo "▶ [2/4] Switching Omarchy theme to $WORK_THEME..."
   set_theme "$WORK_THEME"
+  echo "  ✓ Desktop theme set to $WORK_THEME"
 
-  # 3. Connect GlobalProtect VPN
-  if command -v globalprotect >/dev/null 2>&1; then
-    globalprotect connect >/dev/null 2>&1 &
+  # 3. Connect GlobalProtect VPN interactively
+  echo ""
+  echo "▶ [3/4] Connecting GlobalProtect VPN..."
+  local vpn_state
+  vpn_state=$(get_vpn_status)
+  if [[ "$vpn_state" == "connected" ]]; then
+    echo "  ✓ GlobalProtect VPN is already connected"
+  elif command -v globalprotect >/dev/null 2>&1; then
+    echo "  Starting interactive GlobalProtect session..."
+    echo "  (If prompted, complete authentication in terminal or browser)"
+    echo "--------------------------------------------------------"
+    globalprotect connect || true
+    echo "--------------------------------------------------------"
+
+    vpn_state=$(get_vpn_status)
+    if [[ "$vpn_state" == "connected" ]]; then
+      echo "  ✓ VPN connection established"
+    else
+      echo "  ! Current VPN status: $vpn_state"
+      echo "    If 2FA/SSO was opened in Firefox, complete it there."
+    fi
+  else
+    echo "  ✗ globalprotect binary not found in PATH"
   fi
 
-  # 4. Mount notes directory in background (retries until VPN connects)
-  mount_notes_background
+  # 4. Mount work notes via SSHFS
+  echo ""
+  echo "▶ [4/4] Mounting Obsidian notes vault..."
+  echo "  Remote: $NOTES_REMOTE"
+  echo "  Target: $NOTES_MOUNT"
+  if mountpoint -q "$NOTES_MOUNT" 2>/dev/null; then
+    echo "  ✓ Notes already mounted at $NOTES_MOUNT"
+  else
+    local mounted=false
+    local max_tries=3
+    local try=1
+    while [[ $try -le $max_tries ]]; do
+      echo "  Attempting mount (try $try of $max_tries)..."
+      if mount_notes; then
+        mounted=true
+        echo "  ✓ Notes vault successfully mounted at $NOTES_MOUNT"
+        break
+      fi
+      if [[ $try -lt $max_tries ]]; then
+        echo "  Mount attempt $try failed. Retrying in 2s..."
+        sleep 2
+      fi
+      try=$((try + 1))
+    done
 
-  # Mark active
+    if [[ "$mounted" != "true" ]]; then
+      echo "  ! Could not mount notes yet."
+      echo "    Starting background mount retry watcher..."
+      mount_notes_background
+    fi
+  fi
+
+  # Mark work mode active
   touch "$ACTIVE_FILE"
 
   # Desktop notification
-  notify "Work Mode" "Enabled (VPN connecting • Tds theme • Firefox active)" "󰢏"
+  notify "Work Mode" "Enabled (VPN: $(get_vpn_status) • Theme: $WORK_THEME • Firefox)" "󰢏"
 
   # Signal Omarchy Shell to refresh widget
   if command -v omarchy-shell >/dev/null 2>&1; then
     omarchy-shell -q oma-work refresh 2>/dev/null || true
   fi
 
-  echo "Work Mode enabled: VPN connecting, notes mounting in background, theme '$WORK_THEME' applied, default browser set to $WORK_BROWSER"
+  echo ""
+  echo "════════════════════════════════════════════════════════"
+  echo "           WORK MODE ACTIVATED                          "
+  echo "════════════════════════════════════════════════════════"
+  echo "  • Theme:   $WORK_THEME"
+  echo "  • Browser: $WORK_BROWSER"
+  echo "  • VPN:     $(get_vpn_status)"
+  echo "  • Notes:   $(get_notes_status) ($NOTES_MOUNT)"
+  echo "════════════════════════════════════════════════════════"
 }
 
 disable_work_mode() {
-  # 1. Unmount notes directory BEFORE disconnecting VPN
-  unmount_notes >/dev/null 2>&1 || true
+  echo "════════════════════════════════════════════════════════"
+  echo "           DEACTIVATING WORK MODE                       "
+  echo "════════════════════════════════════════════════════════"
+  echo ""
+
+  # 1. Unmount notes vault BEFORE disconnecting VPN
+  echo "▶ [1/4] Unmounting Obsidian notes vault ($NOTES_MOUNT)..."
+  unmount_notes
+  echo ""
 
   # 2. Disconnect GlobalProtect VPN
+  echo "▶ [2/4] Disconnecting GlobalProtect VPN..."
   if command -v globalprotect >/dev/null 2>&1; then
-    globalprotect disconnect >/dev/null 2>&1 &
+    globalprotect disconnect || true
+    echo "  ✓ GlobalProtect VPN disconnected"
+  else
+    echo "  • globalprotect command not found in PATH"
   fi
+  echo ""
 
   # 3. Restore previous theme
   local restore_theme=""
@@ -240,7 +396,10 @@ disable_work_mode() {
   if [[ -z "$restore_theme" || "${restore_theme,,}" == "${WORK_THEME,,}" ]]; then
     restore_theme="$DEFAULT_FALLBACK_THEME"
   fi
+  echo "▶ [3/4] Restoring personal theme ($restore_theme)..."
   set_theme "$restore_theme"
+  echo "  ✓ Theme restored to $restore_theme"
+  echo ""
 
   # 4. Restore previous browser
   local restore_browser=""
@@ -251,20 +410,30 @@ disable_work_mode() {
   if [[ -z "$restore_browser" || "$restore_browser" == "$WORK_BROWSER" ]]; then
     restore_browser="$DEFAULT_FALLBACK_BROWSER"
   fi
+  echo "▶ [4/4] Restoring default browser ($restore_browser)..."
   set_browser "$restore_browser"
+  echo "  ✓ Default browser restored to $restore_browser"
+  echo ""
 
   # Remove active marker
   rm -f "$ACTIVE_FILE"
 
   # Desktop notification
-  notify "Work Mode" "Disabled (VPN disconnected • notes unmounted • restored theme: $restore_theme • browser: $restore_browser)" "󰢓"
+  notify "Work Mode" "Disabled (Restored: $restore_theme • $restore_browser)" "󰢓"
 
   # Signal Omarchy Shell to refresh widget
   if command -v omarchy-shell >/dev/null 2>&1; then
     omarchy-shell -q oma-work refresh 2>/dev/null || true
   fi
 
-  echo "Work Mode disabled: notes unmounted, VPN disconnected, restored theme '$restore_theme', default browser set to $restore_browser"
+  echo "════════════════════════════════════════════════════════"
+  echo "           WORK MODE DEACTIVATED                        "
+  echo "════════════════════════════════════════════════════════"
+  echo "  • Restored Theme:   $restore_theme"
+  echo "  • Restored Browser: $restore_browser"
+  echo "  • VPN Status:       $(get_vpn_status)"
+  echo "  • Notes Status:     $(get_notes_status)"
+  echo "════════════════════════════════════════════════════════"
 }
 
 toggle_work_mode() {
@@ -308,8 +477,6 @@ print_status() {
   fi
 }
 
-action="${1:-toggle}"
-
 case "$action" in
   on|enable|start)
     enable_work_mode
@@ -325,29 +492,39 @@ case "$action" in
     ;;
   mount)
     mount_notes
+    if command -v omarchy-shell >/dev/null 2>&1; then
+      omarchy-shell -q oma-work refresh 2>/dev/null || true
+    fi
     ;;
   unmount|umount)
     unmount_notes
+    if command -v omarchy-shell >/dev/null 2>&1; then
+      omarchy-shell -q oma-work refresh 2>/dev/null || true
+    fi
     ;;
   status)
     shift || true
     print_status "${1:-}"
     ;;
   -h|--help|help)
-    echo "Usage: work-mode [toggle|on|off|status|auth|mount|unmount] [--json]"
+    echo "Usage: work-mode [toggle|on|off|status|auth|mount|unmount] [--headless] [--json]"
     echo ""
     echo "Commands:"
-    echo "  toggle      Toggle work mode between ON and OFF (default)"
-    echo "  on          Enable work mode (Connect VPN, mount notes, set Tds theme, set Firefox browser)"
-    echo "  off         Disable work mode (Unmount notes, disconnect VPN, restore theme and browser)"
-    echo "  auth        Launch interactive GlobalProtect connect session in floating terminal"
+    echo "  toggle      Toggle work mode between ON and OFF in an interactive session"
+    echo "  on          Enable work mode interactively (VPN, notes, Tds theme, Firefox browser)"
+    echo "  off         Disable work mode interactively (unmount notes, disconnect VPN, restore theme/browser)"
+    echo "  auth        Launch interactive GlobalProtect VPN authentication session"
     echo "  mount       Explicitly mount notes sshfs filesystem"
     echo "  unmount     Explicitly unmount notes sshfs filesystem"
     echo "  status      Show current work mode, VPN, theme, browser, and notes mount status"
+    echo ""
+    echo "Options:"
+    echo "  --headless  Run directly without auto-launching a floating presentation terminal"
+    echo "  --json      Output status as JSON (only with status command)"
     ;;
   *)
     echo "Unknown command: $action" >&2
-    echo "Usage: work-mode [toggle|on|off|status|auth|mount|unmount] [--json]" >&2
+    echo "Usage: work-mode [toggle|on|off|status|auth|mount|unmount] [--headless] [--json]" >&2
     exit 1
     ;;
 esac

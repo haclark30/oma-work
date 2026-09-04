@@ -18,41 +18,44 @@ BarWidget {
   property bool busy: false
 
   readonly property string tooltipMessage: busy
-    ? "Work Mode: Switching..."
+    ? "Work Mode: Launching session..."
     : (isWorkMode
-        ? "Work Mode: ACTIVE\n• VPN: " + vpnStatus + "\n• Notes: " + notesStatus + "\n• Theme: " + currentTheme + "\n• Browser: " + currentBrowser + "\n\n(Left-click: turn OFF, Right/Middle-click: VPN re-auth)"
-        : "Work Mode: INACTIVE\n(Left-click: turn ON, Right/Middle-click: VPN re-auth)")
+        ? "Work Mode: ACTIVE\n• VPN: " + vpnStatus + "\n• Notes: " + notesStatus + "\n• Theme: " + currentTheme + "\n• Browser: " + currentBrowser + "\n\n(Left-click: deactivate in terminal, Right/Middle-click: VPN re-auth)"
+        : "Work Mode: INACTIVE\n(Left-click: activate in terminal, Right/Middle-click: VPN re-auth)")
 
   function refresh() {
     statusProc.running = false
     statusProc.running = true
   }
 
-  function runScript(action) {
-    if (actionProc.running) return
-    root.busy = true
-    actionProc.command = [root.scriptPath, action]
-    actionProc.running = true
-  }
-
-  function launchInteractiveAuth() {
+  function launchTerminalSession(action) {
+    var act = action || "toggle"
+    var cmd = "omarchy-launch-floating-terminal-with-presentation \"" + root.scriptPath + "\" " + act
     if (root.bar && typeof root.bar.run === "function") {
-      root.bar.run("omarchy-launch-floating-terminal-with-presentation globalprotect connect")
+      root.bar.run(cmd)
     } else {
-      Quickshell.execDetached(["bash", "-lc", "omarchy-launch-floating-terminal-with-presentation globalprotect connect"])
+      Quickshell.execDetached(["bash", "-lc", cmd])
     }
+
+    // Refresh dynamically while terminal session runs
+    postActionRefreshTimer.count = 0
+    postActionRefreshTimer.restart()
   }
 
   function toggleWorkMode() {
-    runScript("toggle")
+    launchTerminalSession("toggle")
   }
 
   function enableWorkMode() {
-    runScript("on")
+    launchTerminalSession("on")
   }
 
   function disableWorkMode() {
-    runScript("off")
+    launchTerminalSession("off")
+  }
+
+  function launchInteractiveAuth() {
+    launchTerminalSession("auth")
   }
 
   visible: true
@@ -88,10 +91,18 @@ BarWidget {
     }
   }
 
-  Process {
-    id: actionProc
-    onExited: function(exitCode) {
+  Timer {
+    id: postActionRefreshTimer
+    interval: 2000
+    repeat: true
+    property int count: 0
+    onTriggered: {
       root.refresh()
+      count++
+      if (count >= 10) {
+        stop()
+        count = 0
+      }
     }
   }
 
@@ -108,8 +119,8 @@ BarWidget {
     function toggle(): void { root.toggleWorkMode() }
     function enable(): void { root.enableWorkMode() }
     function disable(): void { root.disableWorkMode() }
-    function mount(): void { runScript("mount") }
-    function unmount(): void { runScript("unmount") }
+    function mount(): void { root.launchTerminalSession("mount") }
+    function unmount(): void { root.launchTerminalSession("unmount") }
     function openAuth(): void { root.launchInteractiveAuth() }
     function refresh(): void { root.refresh() }
     function status(): string {
